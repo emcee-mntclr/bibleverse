@@ -2,7 +2,6 @@
 
 package com.example.lyricsify
 
-import SpotifyBroadcastReceiver
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -13,6 +12,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.StrictMode
 import android.preference.PreferenceManager
@@ -30,6 +30,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
+import androidx.core.text.HtmlCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.lyricsify.Utils.SPOTIFY_PACKAGE
 import com.example.lyricsify.Utils.openApp
@@ -38,20 +39,18 @@ import com.google.android.material.switchmaterial.SwitchMaterial
 import jp.wasabeef.blurry.Blurry
 import kotlinx.coroutines.*
 import okhttp3.*
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 
 
 
-@Suppress("DEPRECATION", "PARAMETER_NAME_CHANGED_ON_OVERRIDE", "UNUSED_EXPRESSION")
+@Suppress("DEPRECATION", "PARAMETER_NAME_CHANGED_ON_OVERRIDE")
 class MainActivity: AppCompatActivity() , ReceiverCallback,
     SpotifyBroadcastReceiver.ReceiverCallback {
 
@@ -68,22 +67,25 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
     private lateinit var lastUpdated: TextView
     private var playbackPosition: Int = 0
     private lateinit var prefs: SharedPreferences
-    private val times = ArrayList<Double>()
-    private val lyrics = ArrayList<String>()
-    private val timesNew = ArrayList<Double>()
+//    private var lyrics: List<String> = emptyList()
+//    private var times: List<Int> = emptyList()
+    private val times_new = mutableListOf<Double>()
+    private var times = mutableListOf<Double>()
+    private var lyrics = mutableListOf<String>()
+
     private lateinit var outputTextLyrics: TextView
-    private val baseUrl =
-        "https://apic-desktop.musixmatch.com/ws/1.1/macro.subtitles.get?format=json&namespace=lyrics_synched&part=lyrics_crowd%2Cuser%2Clyrics_verified_by&tags=nowplaying&user_language=en&f_subtitle_length_max_deviation=1&subtitle_format=mxm&app_id=web-desktop-app-v1.0"
-    private var qTrack: String? = null
-    private var qArtist: String? = null
-    private var qAlbum: String? = null
+     val base_url =
+        "https://api.musixmatch.com/ws/1.1/"
+    private var q_track: String? = null
+    private var q_artist: String? = null
+    private var q_album: String? = null
     private var showLyricsThread: Thread? = null
     private lateinit var gSong: Song
     private lateinit var albumArt: ImageView
-    private val apiKeyDefault = "21062742510293ae06df230e7cd334d26ae4cf17646b37514af666"
-    private var apiKey: String? = null
-    private val times_new = mutableListOf<Double>()
+    private val apiKeyDefault = "a6bea9367054bb36d8b796dcda85ae9a"
+    private var apikey = "a6bea9367054bb36d8b796dcda85ae9a"
     var album_art_url: String? = null
+    private lateinit var finalUrl: String
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,12 +107,13 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
         songInfoTextView = findViewById(R.id.songInfoTextView)
         isPlaying = findViewById(R.id.isPlaying)
         lastUpdated = findViewById(R.id.lastUpdated)
-        togglePlayPause = findViewById(R.id.togglePlayPause)
         mediaButtons = findViewById(R.id.mediaButtons)
+        togglePlayPause = findViewById(R.id.togglePlayPause)
         mediaButtons.visibility = View.GONE
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         spotifyBroadcastReceiver = SpotifyBroadcastReceiver(this)
         prefs = getPreferences(Context.MODE_PRIVATE)
+        finalUrl = "$base_url&apikey=$apikey&q_track=$q_track&q_artist=$q_artist&q_album=$q_album"
 
         val previousButton: ImageButton = findViewById(R.id.previous)
         val playPauseButton: ImageButton = findViewById(R.id.togglePlayPause)
@@ -127,47 +130,51 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
     }
     suspend fun showLyrics() {
         Log.d("Inside", "showLyrics()")
-
-        coroutineScope {
-            try {
-                val lyricsJson = getLyrics()
-
-                Log.d("Lyrics JSON", lyricsJson.toString())
-
-                val job = async { parseLyrics(lyricsJson) }
-                // Wait for the job to complete
-                job.await()
-
-                Log.d("Parsed Times", times.toString())
-                Log.d("Parsed Lyrics", lyrics.toString())
-
-                for (i in times.indices) {
-                    if (i == 0) {
-                        times_new.add(times[i])
-                    } else {
-                        times_new.add(times[i] - times[i - 1])
+        work()
+        showLyricsThread = Thread {
+            if (Thread.interrupted()) {
+                Thread.currentThread().interrupt()
+                return@Thread
+            } else {
+                try {
+                    for (i in 0 until lyrics.size) {
+                        Log.d("Inside last loop", "I is at $i")
+                        Thread.sleep((times_new[i].toLong() * 1000))
+                        updateUi(lyrics[i].toString())
+                        Log.d("Playback position", gSong.playbackPosition.toString())
+                        if (i + 1 == lyrics.size) {
+                            return@Thread
+                        }
                     }
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    showLyricsThread = null
+                    runOnUiThread {
+                        val ot = "Lyrics will appear here"
+                        outputTextLyrics.text = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            Html.fromHtml(ot, Html.FROM_HTML_MODE_COMPACT)
+                        } else {
+                            Html.fromHtml(ot)
+                        }
+                    }
+                    return@Thread
                 }
-
-                Log.d("New times list", times_new.toString())
-
-                // Call updateUi with the lyrics text
-                updateUi(lyrics.joinToString("\n"))
-
-            } catch (e: Exception) {
-                Log.e("showLyrics", "An error occurred: ${e.message}")
-                // Handle the error, show a message, etc.
             }
         }
+        showLyricsThread?.start()
     }
 
 
     suspend fun getLyrics(): JSONObject? = withContext(Dispatchers.IO) {
-        return@withContext suspendCoroutine { continuation ->
-            val finalUrl = "$baseUrl&$apiKey&$qTrack&$qArtist&$qAlbum"
+        val finalUrl = "$base_url&apikey=$apikey&q_track=$q_track&q_artist=$q_artist&q_album=$q_album"
 
+        Log.d("Final URL", finalUrl)
+
+        try {
             val client = OkHttpClient.Builder().build()
+
             val request = Request.Builder()
+                .addHeader("apikey", apikey)
                 .addHeader("authority", "apic-desktop.musixmatch.com")
                 .addHeader("method", "GET")
                 .addHeader("scheme", "https")
@@ -179,94 +186,207 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
                 .method("GET", null)
                 .build()
 
-            val call = client.newCall(request)
+            val response = client.newCall(request).execute()
 
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    continuation.resumeWithException(e)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    if (!response.isSuccessful) {
-                        continuation.resumeWithException(IOException("Unexpected code ${response.code}"))
-                    } else {
-                        try {
-                            Thread.sleep(5000)
-                            val myResponse = response.body?.string()
-                            val jsonObject = JSONObject(myResponse)
-                            continuation.resume(jsonObject)
-                        } catch (e: Exception) {
-                            continuation.resumeWithException(e)
-                        }
-                    }
-                }
-            })
+            if (!response.isSuccessful) {
+                Log.e("Response", "Unexpected code ${response.code}")
+                return@withContext null
+            }
+            Log.d("Response", response.toString())
+            // Log response body
+            val myResponse = response.body?.string()
+            Log.d("Response Body", myResponse ?: "Response body is null or empty")
+            try {
+                Thread.sleep(5000)
+            } catch (e: InterruptedException) {
+                e.printStackTrace()
+            }
+            // Check for null or empty response body
+            if (myResponse.isNullOrBlank()) {
+                Log.e("Response", "Empty or null response body")
+                return@withContext null
+            }
+            // Parse JSON
+            try {
+                val jsonObject = JSONObject(myResponse)
+                Log.d("JSON DATA", jsonObject.toString())
+                jsonObject
+            } catch (e: JSONException) {
+                Log.e("JSON Parsing Error", e.message ?: "Unknown error")
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
     }
 
-
     fun parseLyrics(jsonObject: JSONObject?) {
-        if (jsonObject == null) {
-            Log.e("Lyrics response", "Null JSON response")
-            return
-        }
-        val statusCode = jsonObject.optJSONObject("message")
-            ?.optJSONObject("header")
-            ?.optInt("status_code", -1)
+        var newJObj: JSONArray? = null
 
-        if (statusCode == 404) {
-            // Handle 404 response (lyrics not found)
-            Log.e("Lyrics Response", "Lyrics not found (404)")
+        if (jsonObject == null) {
             return
         }
 
         try {
-            if (jsonObject.has("message") && !jsonObject.isNull("message")) {
-                val messageObject = jsonObject.getJSONObject("message")
+            val message = jsonObject.optJSONObject("message")
+            val body = message?.optJSONObject("body")
+            val macroCalls = body?.optJSONObject("macro_calls")
+            val trackSubtitles = macroCalls?.optJSONObject("track.subtitles.get")
+            val messageBody = trackSubtitles?.optJSONObject("message")?.optJSONObject("body")
+            val subtitleList = messageBody?.optJSONArray("subtitle_list")
 
-                if (messageObject.has("body") && !messageObject.isNull("body")) {
-                    val bodyObject = messageObject.getJSONObject("body")
-
-                    if (bodyObject.has("macro_calls") && !bodyObject.isNull("macro_calls")) {
-                        val macroCallsObject = bodyObject.getJSONObject("macro_calls")
-
-                        if (macroCallsObject.has("track.subtitles.get") && !macroCallsObject.isNull("track.subtitles.get")) {
-                            val trackSubtitlesObject = macroCallsObject.getJSONObject("track.subtitles.get")
-
-                            if (trackSubtitlesObject.has("message") && !trackSubtitlesObject.isNull("message")) {
-                                val messageObjectInSubtitles = trackSubtitlesObject.getJSONObject("message")
-
-                                if (messageObjectInSubtitles.has("body") && !messageObjectInSubtitles.isNull("body")) {
-                                    val bodyObjectInSubtitles = messageObjectInSubtitles.getJSONObject("body")
-
-                                    if (bodyObjectInSubtitles.has("subtitle_list") && !bodyObjectInSubtitles.isNull("subtitle_list")) {
-                                        val subtitleListArray = bodyObjectInSubtitles.getJSONArray("subtitle_list")
-
-
-
-                                        album_art_url = get_album_art_url(jsonObject)
-                                        Log.d("Album art URL", album_art_url!!)
-
-                                        if (album_art_url != null && album_art_url!!.isNotBlank()) {
-                                            val b: Bitmap? = getBitmapFromURL(album_art_url)
-                                            val col = getDominantColor(b)
-                                            changeNavBarColour(col)
-                                            Log.d("colour", col.toString())
-                                            if (b != null) {
-                                                Blurry.with(applicationContext).from(b).into(albumArt)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            if (subtitleList == null) {
+                // Handle the case where "subtitle_list" is not found
+                return
             }
+            album_art_url = get_album_art_url(jsonObject)
+            Log.d("Album art URL", album_art_url!!)
+            val subtitleObject = subtitleList.getJSONObject(0)
+            val subtitleBody = subtitleObject.getJSONObject("subtitle").getString("subtitle_body")
+            newJObj = JSONArray(subtitleBody)
+
         } catch (e: JSONException) {
             e.printStackTrace()
         }
+
+        if (newJObj == null) {
+            // Handle the case where newJObj is null
+        } else {
+            for (i in 0 until newJObj.length()) {
+                try {
+                    val oneObject = newJObj.getJSONObject(i)
+                    times.add(oneObject.getJSONObject("time").getDouble("total"))
+                    lyrics.add(oneObject.getString("text"))
+                } catch (e: JSONException) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        if (album_art_url != null && album_art_url != "" && album_art_url != " ") {
+            var b: Bitmap? = null
+            b = getBitmapFromURL(album_art_url)
+            val col = getDominantColor(b)
+            changeNavBarColor(col)
+            Log.d("colour", col.toString())
+            if (b != null) {
+                Blurry.with(applicationContext).from(b).into(albumArt)
+            }
+        }
     }
+    fun getDominantColor(bitmap: Bitmap?): Int {
+        if (bitmap == null) {
+            return Color.TRANSPARENT
+        }
+
+        val width = bitmap.width
+        val height = bitmap.height
+        val size = width * height
+        val pixels = IntArray(size)
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+
+        var color: Int
+        var r = 0
+        var g = 0
+        var b = 0
+        var a: Int
+        var count = 0
+
+        for (i in pixels.indices) {
+            color = pixels[i]
+            a = Color.alpha(color)
+            if (a > 0) {
+                r += Color.red(color)
+                g += Color.green(color)
+                b += Color.blue(color)
+                count++
+            }
+        }
+
+        r /= count
+        g /= count
+        b /= count
+
+        r = ((r shl 16) and 0x00FF0000).toInt()
+        g = ((g shl 8) and 0x0000FF00).toInt()
+        b = (b and 0x000000FF).toInt()
+
+        color = 0xFF000000.toInt() or r or g or b
+        return color
+    }
+     fun changeNavBarColor(col: Int) {
+        window.navigationBarColor = col
+        window.statusBarColor = col
+    }
+
+    fun get_album_art_url(jobj: JSONObject): String {
+        var abUrl: String? = null
+        try {
+            abUrl = jobj.getJSONObject("message")
+                .getJSONObject("body")
+                .getJSONObject("macro_calls")
+                .getJSONObject("matcher.track.get")
+                .getJSONObject("message")
+                .getJSONObject("body")
+                .getJSONObject("track")
+                .getString("album_coverart_800x800")
+            Log.d("ab_url 800", " " + abUrl.length)
+            if (abUrl == "" || abUrl == " " || abUrl == null || abUrl.isEmpty()) {
+                throw JSONException("")
+            }
+        } catch (e: JSONException) {
+            try {
+                abUrl = jobj.getJSONObject("message")
+                    .getJSONObject("body")
+                    .getJSONObject("macro_calls")
+                    .getJSONObject("matcher.track.get")
+                    .getJSONObject("message")
+                    .getJSONObject("body")
+                    .getJSONObject("track")
+                    .getString("album_coverart_500x500")
+                Log.d("ab_url 500", " " + abUrl.length)
+                if (abUrl == "" || abUrl == " " || abUrl == null || abUrl.isEmpty()) {
+                    throw JSONException("")
+                }
+            } catch (e1: JSONException) {
+                try {
+                    abUrl = jobj.getJSONObject("message")
+                        .getJSONObject("body")
+                        .getJSONObject("macro_calls")
+                        .getJSONObject("matcher.track.get")
+                        .getJSONObject("message")
+                        .getJSONObject("body")
+                        .getJSONObject("track")
+                        .getString("album_coverart_350x350")
+                    Log.d("ab_url 350", " " + abUrl.length)
+                    if (abUrl == "" || abUrl == " " || abUrl == null || abUrl.isEmpty()) {
+                        throw JSONException("")
+                    }
+                } catch (e2: JSONException) {
+                    try {
+                        abUrl = jobj.getJSONObject("message")
+                            .getJSONObject("body")
+                            .getJSONObject("macro_calls")
+                            .getJSONObject("matcher.track.get")
+                            .getJSONObject("message")
+                            .getJSONObject("body")
+                            .getJSONObject("track")
+                            .getString("album_coverart_100x100")
+                        Log.d("ab_url 100", " " + abUrl.length)
+                        if (abUrl == "" || abUrl == " " || abUrl == null || abUrl.isEmpty()) {
+                            throw JSONException("")
+                        }
+                    } catch (e3: JSONException) {
+                        // Handle the case where all attempts failed
+                    }
+                }
+            }
+            e.printStackTrace()
+        }
+        return abUrl.orEmpty()
+    }
+
 
     suspend fun work() {
         try {
@@ -274,24 +394,20 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
             val lyricsJson = getLyrics()
             if (lyricsJson != null) {
                 Log.d("Lyrics JSON", lyricsJson.toString())
-                parseLyrics(lyricsJson)
+                parseLyrics(getLyrics())
                 Log.d("Parsed Times", times.toString())
                 Log.d("Parsed Lyrics", lyrics.toString())
                 times_new.clear() // Clear the list before adding new elements
                 for (i in times.indices) {
                     if (i == 0) {
-                        times_new.add(times[i])
+                        times_new.add(times[i].toDouble())
                     } else {
-                        times_new.add(times[i] - times[i - 1])
+                        times_new.add((times[i] - times[i - 1]).toDouble())
                     }
                 }
                 Log.d("New times list", times_new.toString())
-
-                // Call updateUi with the lyrics text
-                updateUi(lyrics.joinToString("\n"))
             } else {
                 Log.e("work", "Failed to retrieve lyrics JSON")
-                // Handle the case where lyricsJson is null
             }
         } catch (e: Exception) {
             Log.e("work", "An error occurred: ${e.message}")
@@ -303,10 +419,11 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
 
         runOnUiThread {
             val finalText = formattedText
-            outputTextLyrics.text = Html.fromHtml(finalText, Html.FROM_HTML_MODE_COMPACT)
+            outputTextLyrics.text = text
+            Log.d("updateUi", "Updating UI with text: $finalText")
+            outputTextLyrics.text = HtmlCompat.fromHtml(finalText, HtmlCompat.FROM_HTML_MODE_COMPACT)
         }
     }
-
     private fun getBitmapFromURL(imageUrl: String?): Bitmap? {
         return try {
             Log.d("imageurl", imageUrl!!)
@@ -325,9 +442,9 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
 
     @SuppressLint("SetTextI18n")
     override  fun metadataChanged(song: Song) {
-        var qtrack: String?
-        var qartist: String? = null
-        var qalbum: String? = null
+        var q_track: String?
+        var q_artist: String? = null
+        var q_album: String? = null
         var api_key: String? = null
         var trackold: String? = null
 
@@ -337,29 +454,30 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
         lastUpdated.text = "(info updated @${Utils.getTimeStampFromDate(song.timeSent)})"
         Log.d("Playback", song.playbackPosition.toString())
         trackold = song.track
-        qtrack = song.track
-        qartist = song.artist
-        qalbum = song.album
+        q_track = song.track
+        q_artist = song.artist
+        q_album = song.album
 
         val sp = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         api_key = sp.getString("API_key", apiKeyDefault)
         song.playbackPosition = 0
 
         try {
-            qtrack = URLEncoder.encode(qtrack, Charsets.UTF_8.name())
-            qartist = URLEncoder.encode(qartist, Charsets.UTF_8.name())
-            qalbum = URLEncoder.encode(qalbum, Charsets.UTF_8.name())
+            q_track = URLEncoder.encode(q_track, Charsets.UTF_8.name())
+            q_artist = URLEncoder.encode(q_artist, Charsets.UTF_8.name())
+            q_album = URLEncoder.encode(q_album, Charsets.UTF_8.name())
         } catch (e: Exception) {
             Log.d("UnsupportedEncoding", "Failed to encode")
         }
 
-        qtrack = "q_track=$qtrack"
-        qartist = "q_artist=$qartist"
-        qalbum = "q_album=$qalbum"
+        q_track = "q_track=$q_track"
+        q_artist = "q_artist=$q_artist"
+        q_album = "q_album=$q_album"
+        api_key = "usertoken=$api_key"
 
-        Log.d("q_track", qtrack)
-        Log.d("q_artist", qartist)
-        Log.d("q_album", qalbum)
+        Log.d("q_track", q_track)
+        Log.d("q_artist", q_artist)
+        Log.d("q_album", q_album)
         Log.i("New Song", song.track)
 
         val lyricsJson = runBlocking {
@@ -429,7 +547,7 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
 
 
     private fun startService() {
-        // Check if the SpotifyBroadcastReceiver is not null
+        // Check if the com.example.lyricsify.SpotifyBroadcastReceiver is not null
         if (spotifyBroadcastReceiver != null) {
             val filter = IntentFilter()
 
@@ -486,10 +604,7 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
         }
     }
 
-    private fun changeNavBarColour(col: Int) {
-        window.navigationBarColor = col
-        window.statusBarColor = col
-    }
+
     override fun onPause() {
         super.onPause()
         unregisterReceiver(spotifyBroadcastReceiver)
@@ -497,30 +612,24 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
 
     override fun onResume() {
         super.onResume()
+        lifecycleScope.launch {
+            showLyrics()
+        }
         updatePlayPauseButton(audioManager.isMusicActive)
         val filter = IntentFilter().apply {}
-
         val flags = Context.RECEIVER_VISIBLE_TO_INSTANT_APPS
-
         registerReceiver(spotifyBroadcastReceiver, filter, flags.toString(), null)
-
-
         filter.addAction(SpotifyBroadcastReceiver.BroadcastTypes.PLAYBACK_STATE_CHANGED)
         filter.addAction(SpotifyBroadcastReceiver.BroadcastTypes.METADATA_CHANGED)
-
     }
-
     fun closeSwitch() {
         adSwitch.isChecked = false
     }
-
-
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         super.onBackPressed()
         moveTaskToBack(true)
     }
-
     fun handleMuteUnmute(view: View) {
         val id = view.id
         if (id == R.id.unMute) {
@@ -547,17 +656,15 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
                     updatePlayPauseButton(false)
                 } else {
                     val play = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY)
+
+                    // Use clear on mutable lists
                     times.clear()
                     lyrics.clear()
                     times_new.clear()
+
                     showLyrics()
                     audioManager.dispatchMediaKeyEvent(play)
                     updatePlayPauseButton(true)
-                }
-            } else if (id == R.id.next) {
-                if (audioManager.isMusicActive) {
-                    val next = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT)
-                    audioManager.dispatchMediaKeyEvent(next)
                 }
             }
         }
@@ -641,7 +748,6 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
             "I don't have a key"
         ) { dialog, whichButton ->
             //TODO Show an alert with steps to get an API key
-            //Toast.makeText(getApplicationContext(), "Lyrics won't work without an API key", Toast.LENGTH_LONG).show();
         }
         alert.show()
     }
@@ -653,92 +759,7 @@ class MainActivity: AppCompatActivity() , ReceiverCallback,
         return !list.isEmpty()
     }
 
-    fun getDominantColor(bitmap: Bitmap?): Int {
-        if (bitmap == null) {
-            return Color.TRANSPARENT
-        }
-        val width = bitmap.width
-        val height = bitmap.height
-        val size = width * height
-        val pixels = IntArray(size)
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-        var color: Int
-        var r = 0
-        var g = 0
-        var b = 0
-        var a: Int
-        var count = 0
-        for (i in pixels.indices) {
-            color = pixels[i]
-            a = Color.alpha(color)
-            if (a > 0) {
-                r += Color.red(color)
-                g += Color.green(color)
-                b += Color.blue(color)
-                count++
-            }
-        }
-        r /= count
-        g /= count
-        b /= count
-        r = r shl 16 and 0x00FF0000
-        g = g shl 8 and 0x0000FF00
-        b = b and 0x000000FF
-        color = -0x1000000 or r or g or b
-        return color
-    }
 
-    fun get_album_art_url(jobj: JSONObject): String? {
-        var ab_url: String? = null
-        try {
-            ab_url =
-                jobj.getJSONObject("message").getJSONObject("body").getJSONObject("macro_calls")
-                    .getJSONObject("matcher.track.get").getJSONObject("message")
-                    .getJSONObject("body").getJSONObject("track")
-                    .getString("album_coverart_800x800")
-            Log.d("ab_url 800", " " + ab_url.length)
-            if (ab_url === "" || ab_url === " " || ab_url == null || ab_url.length == 0) {
-                throw JSONException("")
-            }
-        } catch (e: JSONException) {
-            try {
-                ab_url =
-                    jobj.getJSONObject("message").getJSONObject("body").getJSONObject("macro_calls")
-                        .getJSONObject("matcher.track.get").getJSONObject("message")
-                        .getJSONObject("body").getJSONObject("track")
-                        .getString("album_coverart_500x500")
-                Log.d("ab_url 500", " " + ab_url.length)
-                if (ab_url === "" || ab_url === " " || ab_url == null || ab_url.length == 0) {
-                    throw JSONException("")
-                }
-            } catch (e1: JSONException) {
-                try {
-                    ab_url = jobj.getJSONObject("message").getJSONObject("body")
-                        .getJSONObject("macro_calls").getJSONObject("matcher.track.get")
-                        .getJSONObject("message").getJSONObject("body").getJSONObject("track")
-                        .getString("album_coverart_350x350")
-                    Log.d("ab_url 350", " " + ab_url.length)
-                    if (ab_url === "" || ab_url === " " || ab_url == null || ab_url.length == 0) {
-                        throw JSONException("")
-                    }
-                } catch (e2: JSONException) {
-                    try {
-                        ab_url = jobj.getJSONObject("message").getJSONObject("body")
-                            .getJSONObject("macro_calls").getJSONObject("matcher.track.get")
-                            .getJSONObject("message").getJSONObject("body").getJSONObject("track")
-                            .getString("album_coverart_100x100")
-                        Log.d("ab_url 100", " " + ab_url.length)
-                        if (ab_url === "" || ab_url === " " || ab_url == null || ab_url.length == 0) {
-                            throw JSONException("")
-                        }
-                    } catch (e3: JSONException) {
-                    }
-                }
-            }
-            e.printStackTrace()
-        }
-        return ab_url
-    }
     override fun onDestroy() {
         super.onDestroy()
 

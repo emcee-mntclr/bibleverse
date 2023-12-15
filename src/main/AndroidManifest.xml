@@ -19,10 +19,9 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme.NoActionBar">
-v
 
         <receiver
-            android:name="SpotifyBroadcastReceiver"
+            android:name=".SpotifyBroadcastReceiver"
             android:enabled="true"
             android:exported="true">
             <intent-filter>

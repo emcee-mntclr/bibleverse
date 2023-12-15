@@ -197,11 +197,13 @@
                     <TextView
                         android:id="@+id/outputTextLyrics"
                         android:layout_width="match_parent"
-                        android:layout_height="match_parent"
+                        android:layout_height="wrap_content"
                         android:gravity="center"
                         android:maxLines="8"
                         android:textSize="25sp"
-                        android:text="Lyrics show here"/>
+                        android:text="Lyrics show here"
+                        android:textStyle="bold"
+                        tools:ignore="HardcodedText" />
 
 
                 </RelativeLayout>
